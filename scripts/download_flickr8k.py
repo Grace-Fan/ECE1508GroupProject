@@ -4,7 +4,6 @@ import requests
 from tqdm import tqdm
 from pathlib import Path
 
-# === Path setup ===
 current_dir = Path(__file__).resolve().parent
 dataset_dir = current_dir.parent / 'dataset'
 model_dir = current_dir.parent / 'model'

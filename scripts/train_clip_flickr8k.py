@@ -8,35 +8,36 @@ from torchvision import transforms
 from tqdm import tqdm
 from transformers import GPT2Tokenizer, GPT2LMHeadModel, CLIPModel, CLIPProcessor
 
-# === Paths ===
+# Path Config 
 current_dir = Path(__file__).resolve().parent
 dataset_dir = current_dir.parent / 'dataset'
 model_dir = current_dir.parent / 'model'
 os.makedirs(model_dir, exist_ok=True)
 
-# === Config ===
+# Model Config
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 BATCH_SIZE = 4
 EPOCHS = 3
-MAX_LEN = 30
-MAX_SAMPLES = 500  # per epoch
+MAX_CAPTION_LEN = 30
+MAX_SAMPLES = 500
 
-# === Load models ===
+# Load CLIP image feature extraction model
 clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").eval().to(DEVICE)
 clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
+# Load GPT2 tokenizer and resize embeddings for caption generation
 gpt2 = GPT2LMHeadModel.from_pretrained("gpt2")
 tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-tokenizer.pad_token = tokenizer.eos_token  # Important for padding
+tokenizer.pad_token = tokenizer.eos_token # padding
 gpt2.resize_token_embeddings(len(tokenizer))
 gpt2 = gpt2.to(DEVICE)
 
-# === Linear projection from CLIP to GPT2 ===
+# Linear projection from CLIP to GPT2
 clip_embed_dim = clip_model.config.projection_dim  # 512
 gpt2_embed_dim = gpt2.config.n_embd  # 768
 clip_to_gpt_proj = nn.Linear(clip_embed_dim, gpt2_embed_dim).to(DEVICE)
 
-# === Dataset ===
+# Dataset Class with resizing transform, limiting samples
 class ImageCaptionDataset(Dataset):
     def __init__(self, image_dir, caption_file, transform=None, max_samples=None):
         self.image_dir = image_dir
@@ -65,17 +66,17 @@ def collate_fn(batch):
     images, captions = zip(*batch)
     return list(images), list(captions)
 
-# === Prepare DataLoader ===
+# Load dataset from Flickr8k images and caption file
 image_dir = dataset_dir / "Flickr8k/Images/Flicker8k_Dataset"
 caption_file = dataset_dir / "Flickr8k/Captions/Flickr8k.token.txt"
 dataset = ImageCaptionDataset(image_dir, caption_file, max_samples=MAX_SAMPLES)
 dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn)
 
-# === Optimizer ===
+# Optimizer
 params = list(gpt2.parameters()) + list(clip_to_gpt_proj.parameters())
 optimizer = torch.optim.AdamW(params, lr=5e-5)
 
-# === Training ===
+# Training
 gpt2.train()
 clip_to_gpt_proj.train()
 
@@ -88,14 +89,15 @@ for epoch in range(EPOCHS):
         inputs = clip_processor(images=images, return_tensors="pt").to(DEVICE)
         with torch.no_grad():
             image_features = clip_model.get_image_features(**inputs)
+        # Project image features to GPT2 embedding space
         image_embeds = clip_to_gpt_proj(image_features).unsqueeze(1)  # (B, 1, 768)
 
-        # Tokenize captions
-        tokenized = tokenizer(list(captions), padding="max_length", max_length=MAX_LEN, return_tensors="pt", truncation=True)
+        # Tokenize captions with padding and truncation
+        tokenized = tokenizer(list(captions), padding="max_length", max_length=MAX_CAPTION_LEN, return_tensors="pt", truncation=True)
         input_ids = tokenized.input_ids.to(DEVICE)
         attention_mask = tokenized.attention_mask.to(DEVICE)
 
-        # Prepare labels
+        # Prepare labels by masking padding tokens
         labels = input_ids.clone()
         labels[input_ids == tokenizer.pad_token_id] = -100
 
@@ -105,7 +107,7 @@ for epoch in range(EPOCHS):
             labels
         ], dim=1)
 
-        # Prepare image embeddings and inputs_embeds
+        # Convert input tokens to GPT2 embeddings
         image_embeds = clip_to_gpt_proj(image_features).unsqueeze(1)  # (B, 1, 768)
         inputs_embeds = gpt2.transformer.wte(input_ids)
         inputs_embeds = torch.cat([image_embeds, inputs_embeds], dim=1)
@@ -120,7 +122,7 @@ for epoch in range(EPOCHS):
         outputs = gpt2(inputs_embeds=inputs_embeds, attention_mask=attention_mask, labels=labels)
         loss = outputs.loss
 
-        # Backward
+        # Backward pass
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
@@ -128,7 +130,7 @@ for epoch in range(EPOCHS):
         total_loss += loss.item()
         loop.set_postfix(loss=total_loss / (loop.n if loop.n else 1))
 
-# === Save model ===
+# Save model
 save_path = model_dir / "clip_caption_gpt2"
 os.makedirs(save_path, exist_ok=True)
 torch.save({

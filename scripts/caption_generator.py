@@ -4,14 +4,14 @@ from PIL import Image
 from transformers import GPT2Tokenizer, GPT2LMHeadModel, CLIPProcessor, CLIPModel
 from torch import nn
 
-# === Setup ===
+# Setup
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 current_dir = Path(__file__).resolve().parent
 dataset_dir = current_dir.parent / 'dataset'
 model_dir = current_dir.parent / 'model' / "clip_caption_gpt2"
 image_path = dataset_dir / 'test' / 'test_image.jpg' 
 
-# === Load tokenizer and models ===
+# Load tokenizer and models
 checkpoint = torch.load(model_dir / "model.pt", map_location=DEVICE)
 
 tokenizer = GPT2Tokenizer.from_pretrained(checkpoint["tokenizer"])
@@ -28,7 +28,7 @@ proj = nn.Linear(clip_model.config.projection_dim, gpt2.config.n_embd)
 proj.load_state_dict(checkpoint["proj"])
 proj = proj.to(DEVICE).eval()
 
-# === Preprocess image ===
+# Preprocess image
 def preprocess_image(image_path):
     image = Image.open(image_path).convert("RGB")
     inputs = clip_processor(images=image, return_tensors="pt").to(DEVICE)
@@ -37,7 +37,7 @@ def preprocess_image(image_path):
     prefix_embed = proj(image_features).unsqueeze(1)  # (1, 1, 768)
     return prefix_embed
 
-# === Generate caption ===
+# Generate caption
 def generate_caption(image_path, max_length=30):
     prefix_embed = preprocess_image(image_path)
 
@@ -63,6 +63,6 @@ def generate_caption(image_path, max_length=30):
     caption = tokenizer.decode(input_ids.squeeze(), skip_special_tokens=True)
     return caption.strip()
 
-# === Run example ===
+# Run example
 caption = generate_caption(image_path)
 print(f"Generated caption: {caption}")
