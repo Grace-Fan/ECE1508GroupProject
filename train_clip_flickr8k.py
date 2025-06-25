@@ -68,7 +68,8 @@ sample_count = 0
 model.train()  # Set model to training mode
 for epoch in range(EPOCHS):
     total_loss = 0
-    loop = tqdm(dataloader, desc=f"Epoch {epoch+1}/{EPOCHS}", leave=True)
+    total_batches = (max_samples + BATCH_SIZE - 1) // BATCH_SIZE
+    loop = tqdm(dataloader, desc=f"Epoch {epoch+1}/{EPOCHS}", total=total_batches, leave=True)
     for images, captions in loop:
         # Prepare inputs for CLIP
         inputs = processor(text=captions, images=images, return_tensors="pt", padding=True).to(DEVICE)
