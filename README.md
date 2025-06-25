@@ -6,13 +6,16 @@ This repository contains Python scripts to download the Flickr8k dataset and fin
 
 ## Files
 
-- `download_flickr8k.py`  
-  Downloads and extracts the Flickr8k dataset (images and captions) into a local folder `Flickr8k/`.
+- `scripts/download_flickr8k.py`  
+  Downloads and extracts the Flickr8k dataset (images and captions) into `dataset/Flickr8k/`.
 
   Flickr8k.token.txt contains image and caption pairing. It contains 8092 images × 5 captions
 
-- `train_clip_flickr8k.py`  
-  Fine-tunes the pretrained CLIP model (`openai/clip-vit-base-patch32`) on the Flickr8k dataset captions and images, assess generalization with retrieval metrics after each epoch, then saves the trained model locally.
+- `scripts/train_clip_flickr8k.py`
+  Condition image features extracted from pretrained CLIP model (`openai/clip-vit-base-patch32`). Maps CLIP image embeddings into GPT-2's embedding space, then prepends these embeddings as a prefix to the token embeddings of captions. Trained on Flickr8k dataset, which contains images paired with captions. After training, the fine-tuned GPT-2 model and projection layer are saved for later use in caption generation. (needs more work)
+
+- `scripts/caption_generator.py`
+  Test script to generate captions from downloaded images (needs more work)
 
 - `requirements.txt`  
   Python package dependencies for running both scripts in a Windows virtual environment.
@@ -30,9 +33,9 @@ This repository contains Python scripts to download the Flickr8k dataset and fin
    ```
 2. **Download dataset**
    ```
-   python download_flickr8k.py
+   python scripts\download_flickr8k.py
    ```
 3. **Train CLIP**
    ```
-   python train_clip_flickr8k.py 
+   python scripts\train_clip_flickr8k.py 
    ```

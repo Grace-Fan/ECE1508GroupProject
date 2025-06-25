@@ -2,6 +2,12 @@ import os
 import zipfile
 import requests
 from tqdm import tqdm
+from pathlib import Path
+
+# === Path setup ===
+current_dir = Path(__file__).resolve().parent
+dataset_dir = current_dir.parent / 'dataset'
+model_dir = current_dir.parent / 'model'
 
 def download_file(url, dest_path):
     response = requests.get(url, stream=True)
@@ -19,14 +25,15 @@ def extract_zip(zip_path, extract_to):
         zip_ref.extractall(extract_to)
 
 def main():
-    os.makedirs('Flickr8k', exist_ok=True)
+    flickr_directory=dataset_dir/'Flickr8k'
+    os.makedirs(flickr_directory, exist_ok=True)
 
     # URLs for Flickr8k dataset (hosted on University of Illinois or Kaggle alternative)
     images_url = 'https://github.com/jbrownlee/Datasets/releases/download/Flickr8k/Flickr8k_Dataset.zip'
     captions_url = 'https://github.com/jbrownlee/Datasets/releases/download/Flickr8k/Flickr8k_text.zip'
 
-    images_zip = os.path.join('Flickr8k', 'Flickr8k_Dataset.zip')
-    captions_zip = os.path.join('Flickr8k', 'Flickr8k_text.zip')
+    images_zip = os.path.join(flickr_directory, 'Flickr8k_Dataset.zip')
+    captions_zip = os.path.join(flickr_directory, 'Flickr8k_text.zip')
 
     print("Downloading Flickr8k images...")
     if not os.path.exists(images_zip):
@@ -41,10 +48,10 @@ def main():
         print("Captions zip already downloaded.")
 
     print("Extracting images...")
-    extract_zip(images_zip, os.path.join('Flickr8k', 'Images'))
+    extract_zip(images_zip, os.path.join(flickr_directory, 'Images'))
 
     print("Extracting captions...")
-    extract_zip(captions_zip, os.path.join('Flickr8k', 'Captions'))
+    extract_zip(captions_zip, os.path.join(flickr_directory, 'Captions'))
 
     print("Download and extraction completed.")
 
