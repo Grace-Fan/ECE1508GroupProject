@@ -21,7 +21,7 @@ EPOCHS = 3
 MAX_CAPTION_LEN = 30
 MAX_SAMPLES = 500
 
-# Load CLIP image feature extraction model
+# Load frozen CLIP image feature extraction model by calling .eval()
 clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").eval().to(DEVICE)
 clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
@@ -76,7 +76,7 @@ dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn
 params = list(gpt2.parameters()) + list(clip_to_gpt_proj.parameters())
 optimizer = torch.optim.AdamW(params, lr=5e-5)
 
-# Training
+# Training GPT2 with CLIP image features
 gpt2.train()
 clip_to_gpt_proj.train()
 
@@ -87,7 +87,7 @@ for epoch in range(EPOCHS):
     for images, captions in loop:
         # Get image features from CLIP
         inputs = clip_processor(images=images, return_tensors="pt").to(DEVICE)
-        with torch.no_grad():
+        with torch.no_grad(): # no update for CLIP (frozen)
             image_features = clip_model.get_image_features(**inputs)
         # Project image features to GPT2 embedding space
         image_embeds = clip_to_gpt_proj(image_features).unsqueeze(1)  # (B, 1, 768)
