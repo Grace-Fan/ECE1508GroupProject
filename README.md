@@ -22,7 +22,7 @@ Contains:
    ```
 3. **Train CLIP**
    ```
-   python scripts\train_clip_flickr8k.py 
+   python scripts\train_Vit_flickr8k.py 
    ```
 
 4. **Run Test Generator**
