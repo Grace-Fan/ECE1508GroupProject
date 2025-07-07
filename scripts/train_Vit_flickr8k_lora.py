@@ -12,6 +12,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import evaluate  # using the 'evaluate' library for BLEU
 from transformers.modeling_outputs import CausalLMOutput
+from peft import LoraConfig, get_peft_model
 
 # Configuration
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -28,6 +29,22 @@ MAX_LEN = 30
 NUM_SAMPLES = 5000
 VAL_SPLIT = 0.1
 LR = 3e-5
+
+lora_config_vit = LoraConfig(
+    r=8,  # rank for low-rank approximation
+    lora_alpha=32,  # scaling factor for LoRA weights
+    target_modules=["query", "key", "value"],  # Apply LoRA to these modules in the attention layers
+    lora_dropout=0.1,  # Dropout for low-rank matrices
+    bias="none"  # No bias for LoRA adaptation
+)
+
+lora_config_gpt2 = LoraConfig(
+    r=8,
+    lora_alpha=32,
+    target_modules=["attn.c_attn", "mlp.c_fc"],  # Apply LoRA to GPT-2 attention and feed-forward layers
+    lora_dropout=0.1,
+    bias="none"
+)
 
 # Load BLEU metric
 bleu_metric = evaluate.load("bleu")
@@ -76,6 +93,7 @@ for name, param in vit.encoder.layer[-4:].named_parameters():
     param.requires_grad = True
 for name, param in vit.pooler.named_parameters():
     param.requires_grad = True
+vit_lora = get_peft_model(vit, lora_config_vit)
 
 tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 tokenizer.pad_token = tokenizer.eos_token
@@ -141,6 +159,14 @@ class GPT2WithCrossAttention(GPT2LMHeadModel):
 
 gpt2 = GPT2WithCrossAttention.from_pretrained("gpt2").to(DEVICE)
 gpt2.resize_token_embeddings(len(tokenizer))
+# Freeze the pre-trained layers of GPT-2 (except the cross-attention layer)
+for name, param in gpt2.named_parameters():
+    if "cross_attention" not in name:
+        param.requires_grad = False
+for idx in [9, 10, 11]:  # Unfreeze layers 9, 10, 11
+    for param in gpt2.transformer.h[idx].parameters():
+        param.requires_grad = True
+gpt2_lora = get_peft_model(gpt2, lora_config_gpt2)
 
 vit_to_gpt2_proj = nn.Linear(vit.config.hidden_size, gpt2.config.n_embd).to(DEVICE)
 
@@ -149,7 +175,7 @@ train_set, val_set = split_dataset(dataset, val_split=VAL_SPLIT)
 train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True)
 val_loader = DataLoader(val_set, batch_size=1)
 
-params = list(gpt2.parameters()) + list(vit_to_gpt2_proj.parameters()) + [p for p in vit.parameters() if p.requires_grad]
+params = [p for p in gpt2_lora.parameters() if p.requires_grad] + list(vit_to_gpt2_proj.parameters()) + [p for p in vit_lora.parameters() if p.requires_grad]
 optimizer = AdamW(params, lr=LR)
 scheduler = CosineAnnealingLR(optimizer, T_max=EPOCHS)
 
@@ -159,7 +185,7 @@ def encode_images(images):
     pil_images = [transforms.ToPILImage()(img.cpu()) for img in images]
     inputs = vit_processor(images=pil_images, return_tensors="pt").to(DEVICE)
     with torch.no_grad():
-        feats = vit(**inputs).pooler_output
+        feats = vit_lora(**inputs).pooler_output
     projected_feats = vit_to_gpt2_proj(feats)
     return projected_feats.unsqueeze(1)
 
@@ -167,14 +193,14 @@ def generate_caption(image_embed, max_len=MAX_LEN):
     generated = image_embed
     input_ids = None
     for _ in range(max_len):
-        out = gpt2(inputs_embeds=generated, return_dict=True)
+        out = gpt2_lora(inputs_embeds=generated, return_dict=True)
         logits = out.logits[:, -1, :]
         next_token = torch.argmax(logits, dim=-1).unsqueeze(-1)
         if input_ids is None:
             input_ids = next_token
         else:
             input_ids = torch.cat([input_ids, next_token], dim=-1)
-        next_embed = gpt2.transformer.wte(next_token)
+        next_embed = gpt2_lora.transformer.wte(next_token)
         generated = torch.cat([generated, next_embed], dim=1)
         if next_token.item() == tokenizer.eos_token_id:
             break
@@ -188,8 +214,8 @@ def evaluate_bleu(references, hypotheses):
     return results
 
 for epoch in range(EPOCHS):
-    gpt2.train()
-    vit.train()
+    gpt2_lora.train()
+    vit_lora.train()
     total_loss = 0
     loop = tqdm(train_loader, desc=f"Epoch {epoch+1}/{EPOCHS}")
     for images, captions in loop:
@@ -204,9 +230,9 @@ for epoch in range(EPOCHS):
         labels[input_ids == tokenizer.pad_token_id] = -100
         labels = torch.cat([torch.full((labels.size(0), 1), -100).to(DEVICE), labels], dim=1)
 
-        input_embeds = gpt2.transformer.wte(input_ids)
+        input_embeds = gpt2_lora.transformer.wte(input_ids)
         with torch.autocast(device_type='cuda' if torch.cuda.is_available() else 'cpu'):
-            outputs = gpt2(inputs_embeds=input_embeds, image_embeds=image_embeds, attention_mask=attention_mask, labels=labels)
+            outputs = gpt2_lora(inputs_embeds=input_embeds, image_embeds=image_embeds, attention_mask=attention_mask, labels=labels)
             loss = outputs.loss
 
         if torch.cuda.is_available():
@@ -223,8 +249,8 @@ for epoch in range(EPOCHS):
     scheduler.step()
 
     # Validation BLEU evaluation
-    gpt2.eval()
-    vit.eval()
+    gpt2_lora.eval()
+    vit_lora.eval()
     references, hypotheses = [], []
     for images, captions in val_loader:
         image_embed = encode_images(images)
@@ -254,10 +280,10 @@ for epoch in range(EPOCHS):
 
 # Save model
 torch.save({
-    "gpt2": gpt2.state_dict(),
-    "vit": vit.state_dict(),
+    "gpt2": gpt2_lora.state_dict(),
+    "vit": vit_lora.state_dict(),
     "proj": vit_to_gpt2_proj.state_dict(),
     "tokenizer": tokenizer.name_or_path
-}, MODEL_DIR / "model.pt")
+}, MODEL_DIR / "model_lora.pt")
 
 print("Model saved.")
