@@ -25,7 +25,7 @@ os.makedirs(MODEL_DIR, exist_ok=True)
 BATCH_SIZE = 8
 EPOCHS = 10
 MAX_LEN = 30
-NUM_SAMPLES = 5000
+NUM_SAMPLES = 500
 VAL_SPLIT = 0.1
 LR = 3e-5
 
@@ -164,10 +164,12 @@ def encode_images(images):
     return projected_feats.unsqueeze(1)
 
 def generate_caption(image_embed, max_len=MAX_LEN):
-    generated = image_embed
+    prompt = "Describe this image: "
+    prompt_embed = gpt2.transformer.wte(tokenizer.encode(prompt, return_tensors="pt"))
+    generated = prompt_embed
     input_ids = None
     for _ in range(max_len):
-        out = gpt2(inputs_embeds=generated, return_dict=True)
+        out = gpt2(inputs_embeds=generated, image_embeds=image_embed)
         logits = out.logits[:, -1, :]
         next_token = torch.argmax(logits, dim=-1).unsqueeze(-1)
         if input_ids is None:

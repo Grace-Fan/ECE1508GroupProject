@@ -190,10 +190,12 @@ def encode_images(images):
     return projected_feats.unsqueeze(1)
 
 def generate_caption(image_embed, max_len=MAX_LEN):
-    generated = image_embed
+    prompt = "Describe this image: "
+    prompt_embed = gpt2.transformer.wte(tokenizer.encode(prompt, return_tensors="pt"))
+    generated = prompt_embed
     input_ids = None
     for _ in range(max_len):
-        out = gpt2_lora(inputs_embeds=generated, return_dict=True)
+        out = gpt2(inputs_embeds=generated, image_embeds=image_embed)
         logits = out.logits[:, -1, :]
         next_token = torch.argmax(logits, dim=-1).unsqueeze(-1)
         if input_ids is None:
