@@ -10,7 +10,6 @@ from transformers import GPT2LMHeadModel, GPT2Config, GPT2Tokenizer, ViTModel, V
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import evaluate  # using the 'evaluate' library for BLEU
-from transformers.modeling_outputs import CausalLMOutput
 
 # Configuration
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -24,7 +23,7 @@ os.makedirs(MODEL_DIR, exist_ok=True)
 BATCH_SIZE = 8
 EPOCHS = 10
 MAX_LEN = 30
-NUM_SAMPLES = 500
+NUM_SAMPLES = 5000
 VAL_SPLIT = 0.1
 LR = 3e-5
 
@@ -79,47 +78,9 @@ for name, param in vit.pooler.named_parameters():
 tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 tokenizer.pad_token = tokenizer.eos_token
 
-class CrossAttentionLayer(nn.Module):
-    def __init__(self, hidden_size, num_heads):
-        super().__init__()
-        self.cross_attn = nn.MultiheadAttention(embed_dim=hidden_size, num_heads=num_heads, batch_first=True)
-        self.norm = nn.LayerNorm(hidden_size)
-        self.dropout = nn.Dropout(0.1)
-
-    def forward(self, hidden_states, image_embeds):
-        # Cross attention: Q = hidden_states, K/V = image_embeds
-        attn_output, _ = self.cross_attn(query=hidden_states, key=image_embeds, value=image_embeds, key_padding_mask=None)
-        hidden_states = self.norm(hidden_states + self.dropout(attn_output))
-        return hidden_states
-
-class GPT2WithCrossAttention(GPT2LMHeadModel):
-    def __init__(self, config: GPT2Config):
-        super().__init__(config)
-        self.cross_attention = CrossAttentionLayer(config.n_embd, config.n_head)
-
-    def forward(self, attention_mask=None, labels=None, inputs_embeds=None, image_embeds=None):
-        # Pass text embeddings through GPT-2 transformer
-        transformer_outputs = self.transformer(attention_mask=attention_mask, inputs_embeds=inputs_embeds)
-        hidden_states = transformer_outputs.last_hidden_state
-
-        # Apply cross-attention to the GPT-2 hidden states
-        if image_embeds is not None:
-            hidden_states = self.cross_attention(hidden_states, image_embeds)
-
-        # Continue with the rest of GPT-2's forward pass
-        logits = self.lm_head(hidden_states)  # (batch_size, seq_len, vocab_size)
-
-        # Compute loss if labels provided
-        loss = None
-        if labels is not None:
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-            loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
-            loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-
-        return CausalLMOutput(loss=loss, logits=logits)
-
-gpt2 = GPT2WithCrossAttention.from_pretrained("gpt2").to(DEVICE)
+config = GPT2Config.from_pretrained('gpt2')
+config.add_cross_attention = True  # enable cross-attention layers
+gpt2 = GPT2LMHeadModel.from_pretrained('gpt2', config=config).to(DEVICE)
 gpt2.resize_token_embeddings(len(tokenizer))
 
 vit_to_gpt2_proj = nn.Linear(vit.config.hidden_size, gpt2.config.n_embd).to(DEVICE)
@@ -150,7 +111,7 @@ def generate_caption(image_embed, max_len=MAX_LEN):
     )
     input_ids = None
     for _ in range(max_len):
-        out = gpt2(inputs_embeds=generated, image_embeds=image_embed)
+        out = gpt2(inputs_embeds=generated, encoder_hidden_states=image_embed)
         logits = out.logits[:, -1, :]
         next_token = torch.argmax(logits, dim=-1).unsqueeze(-1)
         if input_ids is None:
@@ -188,7 +149,7 @@ for epoch in range(EPOCHS):
 
         input_embeds = gpt2.transformer.wte(input_ids)
         with torch.autocast(device_type='cuda' if torch.cuda.is_available() else 'cpu'):
-            outputs = gpt2(inputs_embeds=input_embeds, image_embeds=image_embeds, attention_mask=attention_mask, labels=labels)
+            outputs = gpt2(inputs_embeds=input_embeds, encoder_hidden_states=image_embeds, attention_mask=attention_mask, labels=labels)
             loss = outputs.loss
 
         if torch.cuda.is_available():
