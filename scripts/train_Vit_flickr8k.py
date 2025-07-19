@@ -1,5 +1,4 @@
 import os
-import json
 from pathlib import Path
 from PIL import Image
 from tqdm import tqdm
@@ -7,7 +6,7 @@ import torch
 from torch import nn
 from torch.utils.data import Dataset, DataLoader, random_split
 from torchvision import transforms
-from transformers import GPT2LMHeadModel, GPT2Tokenizer, ViTModel, ViTImageProcessor
+from transformers import GPT2LMHeadModel, GPT2Config, GPT2Tokenizer, ViTModel, ViTImageProcessor
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import evaluate  # using the 'evaluate' library for BLEU
@@ -81,47 +80,27 @@ tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 tokenizer.pad_token = tokenizer.eos_token
 
 class CrossAttentionLayer(nn.Module):
-    def __init__(self, hidden_size):
-        super(CrossAttentionLayer, self).__init__()
-        self.query_projection = nn.Linear(hidden_size, hidden_size)
-        self.key_projection = nn.Linear(hidden_size, hidden_size)
-        self.value_projection = nn.Linear(hidden_size, hidden_size)
-        self.attention = nn.MultiheadAttention(hidden_size, num_heads=12)
-        self.output_projection = nn.Linear(hidden_size, hidden_size)
+    def __init__(self, hidden_size, num_heads):
+        super().__init__()
+        self.cross_attn = nn.MultiheadAttention(embed_dim=hidden_size, num_heads=num_heads, batch_first=True)
+        self.norm = nn.LayerNorm(hidden_size)
+        self.dropout = nn.Dropout(0.1)
 
-    def forward(self, text_embeds, image_embeds):
-        """
-        text_embeds: (batch_size, seq_len, hidden_size)
-        image_embeds: (batch_size, num_image_tokens, hidden_size)
-        attention_mask: (batch_size, seq_len + num_image_tokens)
-        """
-        # Linear projections for cross-attention (text queries, image keys/values)
-        query = self.query_projection(text_embeds)  # (batch_size, seq_len, hidden_size)
-        key = self.key_projection(image_embeds)  # (batch_size, num_image_tokens, hidden_size)
-        value = self.value_projection(image_embeds)  # (batch_size, num_image_tokens, hidden_size)
-
-        # Transpose for multihead attention (batch_size, hidden_size, seq_len)
-        query = query.transpose(0, 1)  # (seq_len, batch_size, hidden_size)
-        key = key.transpose(0, 1)  # (num_image_tokens, batch_size, hidden_size)
-        value = value.transpose(0, 1)  # (num_image_tokens, batch_size, hidden_size)
-
-        # Apply cross-attention
-        attn_output, _ = self.attention(query, key, value)
-
-        # Project back to hidden size
-        output = self.output_projection(attn_output.transpose(0, 1))  # (batch_size, seq_len, hidden_size)
-        return output
+    def forward(self, hidden_states, image_embeds):
+        # Cross attention: Q = hidden_states, K/V = image_embeds
+        attn_output, _ = self.cross_attn(query=hidden_states, key=image_embeds, value=image_embeds, key_padding_mask=None)
+        hidden_states = self.norm(hidden_states + self.dropout(attn_output))
+        return hidden_states
 
 class GPT2WithCrossAttention(GPT2LMHeadModel):
-    def __init__(self, config):
-        super(GPT2WithCrossAttention, self).__init__(config)
-        self.cross_attention = CrossAttentionLayer(config.n_embd)  # Add cross-attention layer
-        self.transformer = self.transformer  # GPT-2's transformer blocks
+    def __init__(self, config: GPT2Config):
+        super().__init__(config)
+        self.cross_attention = CrossAttentionLayer(config.n_embd, config.n_head)
 
-    def forward(self, input_ids=None, attention_mask=None, labels=None, inputs_embeds=None, image_embeds=None):
-        # Encode text input
-        outputs = self.transformer(input_ids=input_ids, attention_mask=attention_mask, inputs_embeds=inputs_embeds)
-        hidden_states = outputs[0]
+    def forward(self, attention_mask=None, labels=None, inputs_embeds=None, image_embeds=None):
+        # Pass text embeddings through GPT-2 transformer
+        transformer_outputs = self.transformer(attention_mask=attention_mask, inputs_embeds=inputs_embeds)
+        hidden_states = transformer_outputs.last_hidden_state
 
         # Apply cross-attention to the GPT-2 hidden states
         if image_embeds is not None:
@@ -133,9 +112,10 @@ class GPT2WithCrossAttention(GPT2LMHeadModel):
         # Compute loss if labels provided
         loss = None
         if labels is not None:
-            shift_labels = labels[:, 1:].contiguous()
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
             loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
-            loss = loss_fct(logits.view(-1, logits.size(-1)), shift_labels.view(-1))
+            loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
 
         return CausalLMOutput(loss=loss, logits=logits)
 
@@ -163,10 +143,11 @@ def encode_images(images):
     projected_feats = vit_to_gpt2_proj(feats)
     return projected_feats.unsqueeze(1)
 
+@torch.no_grad()
 def generate_caption(image_embed, max_len=MAX_LEN):
-    prompt = "Describe this image: "
-    prompt_embed = gpt2.transformer.wte(tokenizer.encode(prompt, return_tensors="pt"))
-    generated = prompt_embed
+    generated = gpt2.transformer.wte(
+        torch.tensor([[tokenizer.bos_token_id or tokenizer.eos_token_id]], device=DEVICE)
+    )
     input_ids = None
     for _ in range(max_len):
         out = gpt2(inputs_embeds=generated, image_embeds=image_embed)
@@ -204,7 +185,6 @@ for epoch in range(EPOCHS):
 
         labels = input_ids.clone()
         labels[input_ids == tokenizer.pad_token_id] = -100
-        labels = torch.cat([torch.full((labels.size(0), 1), -100).to(DEVICE), labels], dim=1)
 
         input_embeds = gpt2.transformer.wte(input_ids)
         with torch.autocast(device_type='cuda' if torch.cuda.is_available() else 'cpu'):
@@ -231,6 +211,8 @@ for epoch in range(EPOCHS):
     for images, captions in val_loader:
         image_embed = encode_images(images)
         gen = generate_caption(image_embed)
+        print(f"Generated caption: {gen}")
+        print(f"Reference caption: {captions[0]}")
         references.append(captions[0])
         hypotheses.append(gen)
 

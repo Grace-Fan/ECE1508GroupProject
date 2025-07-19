@@ -257,6 +257,8 @@ for epoch in range(EPOCHS):
     for images, captions in val_loader:
         image_embed = encode_images(images)
         gen = generate_caption(image_embed)
+        print(f"Generated caption: {gen}")
+        print(f"Reference caption: {captions[0]}")
         references.append(captions[0])
         hypotheses.append(gen)
 
