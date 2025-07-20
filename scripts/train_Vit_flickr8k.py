@@ -100,29 +100,36 @@ def encode_images(images):
     pil_images = [transforms.ToPILImage()(img.cpu()) for img in images]
     inputs = vit_processor(images=pil_images, return_tensors="pt").to(DEVICE)
     with torch.no_grad():
-        feats = vit(**inputs).pooler_output
-    projected_feats = vit_to_gpt2_proj(feats)
-    return projected_feats.unsqueeze(1)
+        feats = vit(**inputs).last_hidden_state  # (B, N, D)
+    projected_feats = vit_to_gpt2_proj(feats)  # (B, N, gpt2_dim)
+    return projected_feats
 
 @torch.no_grad()
 def generate_caption(image_embed, max_len=MAX_LEN):
-    generated = gpt2.transformer.wte(
-        torch.tensor([[tokenizer.bos_token_id or tokenizer.eos_token_id]], device=DEVICE)
+    input_ids = torch.tensor([[tokenizer.bos_token_id]], device=DEVICE)
+    encoder_attention_mask = torch.ones(image_embed.shape[:2], dtype=torch.long).to(DEVICE)
+    # output_ids = gpt2.generate(
+    #     input_ids=input_ids,
+    #     encoder_hidden_states=image_embed,
+    #     encoder_attention_mask=encoder_attention_mask,
+    #     max_length=max_len,
+    #     do_sample=True,
+    #     top_k=50,
+    #     top_p=0.95,
+    #     num_return_sequences=1,
+    #     eos_token_id=tokenizer.eos_token_id
+    # )
+    output_ids = gpt2.generate(
+        input_ids=input_ids,
+        encoder_hidden_states=image_embed,
+        encoder_attention_mask=encoder_attention_mask,
+        max_length=max_len,
+        eos_token_id=tokenizer.eos_token_id,
+        pad_token_id=tokenizer.pad_token_id,
+        attention_mask=torch.ones_like(input_ids),
+        do_sample=False
     )
-    input_ids = None
-    for _ in range(max_len):
-        out = gpt2(inputs_embeds=generated, encoder_hidden_states=image_embed)
-        logits = out.logits[:, -1, :]
-        next_token = torch.argmax(logits, dim=-1).unsqueeze(-1)
-        if input_ids is None:
-            input_ids = next_token
-        else:
-            input_ids = torch.cat([input_ids, next_token], dim=-1)
-        next_embed = gpt2.transformer.wte(next_token)
-        generated = torch.cat([generated, next_embed], dim=1)
-        if next_token.item() == tokenizer.eos_token_id:
-            break
-    return tokenizer.decode(input_ids.squeeze(), skip_special_tokens=True)
+    return tokenizer.decode(output_ids[0][1:], skip_special_tokens=True)
 
 def evaluate_bleu(references, hypotheses):
     # references: list of ground truth captions (strings)
@@ -139,17 +146,27 @@ for epoch in range(EPOCHS):
     for images, captions in loop:
         optimizer.zero_grad()
         image_embeds = encode_images(images)
+        encoder_attention_mask = torch.ones(image_embeds.shape[:2], dtype=torch.long).to(DEVICE)
 
-        tokenized = tokenizer(list(captions), padding="max_length", max_length=MAX_LEN, return_tensors="pt", truncation=True)
+        captions = [tokenizer.bos_token + " " + cap.strip().lower() + " " + tokenizer.eos_token for cap in captions]
+        tokenized = tokenizer(
+            captions,
+            padding="max_length",
+            max_length=MAX_LEN,
+            return_tensors="pt",
+            truncation=True
+        )
+    
         input_ids = tokenized.input_ids.to(DEVICE)
         attention_mask = tokenized.attention_mask.to(DEVICE)
 
         labels = input_ids.clone()
         labels[input_ids == tokenizer.pad_token_id] = -100
 
-        input_embeds = gpt2.transformer.wte(input_ids)
+        # input_embeds = gpt2.transformer.wte(input_ids)
         with torch.autocast(device_type='cuda' if torch.cuda.is_available() else 'cpu'):
-            outputs = gpt2(inputs_embeds=input_embeds, encoder_hidden_states=image_embeds, attention_mask=attention_mask, labels=labels)
+            outputs = gpt2(input_ids=input_ids, encoder_hidden_states=image_embeds, encoder_attention_mask=encoder_attention_mask,
+                           attention_mask=attention_mask, labels=labels)
             loss = outputs.loss
 
         if torch.cuda.is_available():
