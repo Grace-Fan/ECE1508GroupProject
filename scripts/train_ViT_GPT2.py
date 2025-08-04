@@ -21,7 +21,7 @@ CAPTION_FILE = DATASET_DIR / "Captions" / "Flickr8k.token.txt"
 os.makedirs(MODEL_DIR, exist_ok=True)
 
 BATCH_SIZE = 8
-EPOCHS = 10
+EPOCHS = 20
 MAX_LEN = 30
 NUM_SAMPLES = 5000
 VAL_SPLIT = 0.1
@@ -189,8 +189,8 @@ for epoch in range(EPOCHS):
     for images, captions in val_loader:
         image_embed = encode_images(images)
         gen = generate_caption(image_embed)
-        print(f"Generated caption: {gen}")
-        print(f"Reference caption: {captions[0]}")
+        # print(f"Generated caption: {gen}")
+        # print(f"Reference caption: {captions[0]}")
         references.append(captions[0])
         hypotheses.append(gen)
 

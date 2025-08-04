@@ -1,2 +1,3 @@
 # model
-Folder containing trained clip/gpt model
+
+Folder containing trained ViT-GPT2 model
