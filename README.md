@@ -1,5 +1,7 @@
 # ECE1508GroupProject
+
 Contains:
+
 - dataset folder
 - model folder
 - scripts folder
@@ -16,16 +18,18 @@ Contains:
    venv\Scripts\activate
    pip install -r requirements.txt
    ```
+
 2. **Download dataset**
    ```
    python scripts\download_flickr8k.py
    ```
-3. **Train CLIP**
+3. **Train ViT-GPT2**
+
    ```
-   python scripts\train_clip_flickr8k.py 
+   python scripts\train_ViT_GPT2.py
    ```
 
-4. **Run Test Generator**
-    ```
-    python scripts\caption_generator.py
-    ```
+4. **Run Text Generator**
+   ```
+   python scripts\caption_generator.py
+   ```
