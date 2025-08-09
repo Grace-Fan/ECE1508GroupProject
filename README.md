@@ -2,8 +2,6 @@
 
 This project implements an image captioning system using a Vision Transformer (ViT) and GPT-2 model. The system is trained on the Flickr8k dataset and can generate captions for images.
 
----
-
 ## Project Structure
 
 - **`dataset/`**  
@@ -21,8 +19,6 @@ This project implements an image captioning system using a Vision Transformer (V
 
 - **`requirements.txt`**  
   Lists the Python dependencies required for the project.
-
----
 
 ## Setup
 
@@ -52,8 +48,6 @@ Train the ViT-GPT2 model using the following command:
 python scripts/train_ViT_GPT2.py
 ```
 
----
-
 ## Demo: Generate Captions for an Image
 
 You can use the `caption_generator.py` script as a demo to generate captions for an image. Follow these steps:
@@ -80,13 +74,9 @@ Here is an example of the input image and the generated caption:
 
 **Generated Caption**: "a little boy is playing soccer in a field ."
 
----
-
 ## Dataset
 
 The project uses the Flickr8k dataset, which contains 8,092 images, each paired with 5 captions. The dataset is downloaded and extracted into the `dataset/Flickr8k/` folder.
-
----
 
 ## Model
 
